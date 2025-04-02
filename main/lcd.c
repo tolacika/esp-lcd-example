@@ -1,27 +1,28 @@
 #include "lcd.h"
 
 static const char *TAG = "I2C_LCD";
-
 static i2c_master_dev_handle_t i2c_device_handle = NULL;
 static i2c_master_bus_handle_t i2c_bus_handle = NULL;
-static uint8_t lcd_status = LCD_BACKLIGHT;
+static uint8_t lcd_backlight_status = LCD_BACKLIGHT;
 
-esp_err_t i2c_transmit_with_enable_toggle(uint8_t data) {
-    uint8_t data_with_enable = data | LCD_ENABLE;  // Set Enable bit
+// Helper function to toggle the enable bit
+static esp_err_t i2c_transmit_with_enable_toggle(uint8_t data) {
+    uint8_t data_with_enable = data | LCD_ENABLE;
     ESP_ERROR_CHECK(i2c_master_transmit(i2c_device_handle, &data_with_enable, 1, -1));
     vTaskDelay(pdMS_TO_TICKS(1));
 
-    data_with_enable &= ~LCD_ENABLE;              // Clear Enable bit
+    data_with_enable &= ~LCD_ENABLE;
     ESP_ERROR_CHECK(i2c_master_transmit(i2c_device_handle, &data_with_enable, 1, -1));
     vTaskDelay(pdMS_TO_TICKS(1));
 
     return ESP_OK;
 }
 
-esp_err_t i2c_send_byte_on_4bits(uint8_t data, uint8_t rs) {
+// Send a byte of data to the LCD in 4-bit mode
+static esp_err_t i2c_send_byte_on_4bits(uint8_t data, uint8_t rs) {
     uint8_t nibbles[2] = {
-        (data & 0xF0) | rs | lcd_status | LCD_RW_WRITE,
-        ((data << 4) & 0xF0) | rs | lcd_status | LCD_RW_WRITE
+        (data & 0xF0) | rs | lcd_backlight_status | LCD_RW_WRITE,
+        ((data << 4) & 0xF0) | rs | lcd_backlight_status | LCD_RW_WRITE
     };
     ESP_ERROR_CHECK(i2c_transmit_with_enable_toggle(nibbles[0]));
     ESP_ERROR_CHECK(i2c_transmit_with_enable_toggle(nibbles[1]));
@@ -31,10 +32,11 @@ esp_err_t i2c_send_byte_on_4bits(uint8_t data, uint8_t rs) {
     return ESP_OK;
 }
 
+// Initialize the I2C master
 void i2c_master_init(void) {
     i2c_master_bus_config_t i2c_bus_config = {
         .clk_source = I2C_CLK_SRC_DEFAULT,
-        .i2c_port = I2C_NUM_0,
+        .i2c_port = I2C_MASTER_NUM,
         .scl_io_num = I2C_MASTER_SCL_IO,
         .sda_io_num = I2C_MASTER_SDA_IO,
         .glitch_ignore_cnt = 7,
@@ -54,57 +56,46 @@ void i2c_master_init(void) {
     ESP_LOGI(TAG, "I2C device initialized");
 }
 
+// Initialize the LCD
 void lcd_init(void) {
-    uint8_t data = lcd_status | LCD_ENABLE_OFF | LCD_RW_WRITE | LCD_RS_CMD;
-    ESP_ERROR_CHECK(i2c_master_transmit(i2c_device_handle, &data, 1, -1));
-    ESP_LOGI(TAG, "I2C device command sent");
-    vTaskDelay(pdMS_TO_TICKS(5));  // Wait for LCD to power up
+    uint8_t init_8bit_commands[] = {
+        lcd_backlight_status | LCD_ENABLE_OFF | LCD_RW_WRITE | LCD_RS_CMD,
+        0b00110000 | lcd_backlight_status | LCD_RW_WRITE | LCD_RS_CMD,
+        0b00110000 | lcd_backlight_status | LCD_RW_WRITE | LCD_RS_CMD,
+        0b00110000 | lcd_backlight_status | LCD_RW_WRITE | LCD_RS_CMD,
+        0b00100000 | lcd_backlight_status | LCD_RW_WRITE | LCD_RS_CMD,
+    };
 
-    // Initialize LCD in 4-bit mode
-    uint8_t bit8_mode = 0b00110000; // Set to 8-bit mode
-    uint8_t bit4_mode = 0b00100000; // Set to 4-bit mode
-    data = bit8_mode | lcd_status | LCD_RW_WRITE | LCD_RS_CMD;
-    ESP_ERROR_CHECK(i2c_transmit_with_enable_toggle(data));
-    vTaskDelay(pdMS_TO_TICKS(5));
-    ESP_ERROR_CHECK(i2c_transmit_with_enable_toggle(data));
-    vTaskDelay(pdMS_TO_TICKS(1));
-    data = bit4_mode | lcd_status | LCD_RW_WRITE | LCD_RS_CMD;
-    ESP_ERROR_CHECK(i2c_transmit_with_enable_toggle(data));
-    vTaskDelay(pdMS_TO_TICKS(1));
+    uint8_t init_commands[] = {
+        //0b00110000, 0b00110000, 0b00110000, 0b00100000, // 8-bit mode to 4-bit mode
+        0b00101000, // Function set: 4-bit mode, 2 lines, 5x8 dots
+        0b00001100, // Display control: display on, cursor off, blink off
+        0b00000001, // Clear display
+        0b00000110, // Entry mode set: increment cursor, no shift
+        0b00000010, // Set cursor to home position
+        0b10000000  // Set cursor to first line
+    };
 
-    // Function set: 4-bit mode, 2 lines, 5x8 dots
-    data = 0b00101000;
-    ESP_ERROR_CHECK(i2c_send_byte_on_4bits(data, LCD_RS_CMD));
-    // Display control: display on, cursor on, blink on
-    data = 0b00001111;
-    ESP_ERROR_CHECK(i2c_send_byte_on_4bits(data, LCD_RS_CMD));
-    // Clear display
-    data = 0b00000001;
-    ESP_ERROR_CHECK(i2c_send_byte_on_4bits(data, LCD_RS_CMD));
-    vTaskDelay(pdMS_TO_TICKS(2));
-    // Entry mode set: increment cursor, no shift
-    data = 0b00000110;
-    ESP_ERROR_CHECK(i2c_send_byte_on_4bits(data, LCD_RS_CMD));
-    vTaskDelay(pdMS_TO_TICKS(2));
-    // Set cursor to home position
-    data = 0b00000010;
-    ESP_ERROR_CHECK(i2c_send_byte_on_4bits(data, LCD_RS_CMD));
-    vTaskDelay(pdMS_TO_TICKS(2));
-    // Set cursor to first line
-    data = 0b10000000;
-    ESP_ERROR_CHECK(i2c_send_byte_on_4bits(data, LCD_RS_CMD));
-    vTaskDelay(pdMS_TO_TICKS(2));
+    for (uint8_t i = 0; i < sizeof(init_8bit_commands); i++) {
+        ESP_ERROR_CHECK(i2c_transmit_with_enable_toggle(init_8bit_commands[i]));
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+
+    for (uint8_t i = 0; i < sizeof(init_commands); i++) {
+        ESP_ERROR_CHECK(i2c_send_byte_on_4bits(init_commands[i], LCD_RS_CMD));
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
 }
 
+// Set cursor position on the LCD
 void lcd_set_cursor(uint8_t col, uint8_t row) {
     uint8_t row_offsets[] = {0x00, 0x40, 0x14, 0x54};
-    if (row > 3) {
-        row = 3;  // Prevent out-of-bounds access
-    }
+    if (row > 3) row = 3;  // Prevent out-of-bounds access
     uint8_t data = 0x80 | (col + row_offsets[row]);
     ESP_ERROR_CHECK(i2c_send_byte_on_4bits(data, LCD_RS_CMD));
 }
 
+// Write a string to the LCD
 void lcd_write_string(const char *str) {
     while (*str) {
         ESP_ERROR_CHECK(i2c_send_byte_on_4bits((uint8_t)(*str), LCD_RS_DATA));
@@ -113,18 +104,20 @@ void lcd_write_string(const char *str) {
     ESP_LOGI(TAG, "I2C device string sent");
 }
 
+// Clear the LCD display
 void lcd_clear(void) {
     uint8_t data = 0b00000001;
     ESP_ERROR_CHECK(i2c_send_byte_on_4bits(data, LCD_RS_CMD));
     vTaskDelay(pdMS_TO_TICKS(2));
 }
 
+// Control the LCD backlight
 void lcd_backlight(bool state) {
     if (state) {
-        lcd_status |= LCD_BACKLIGHT;
+        lcd_backlight_status |= LCD_BACKLIGHT;
     } else {
-        lcd_status &= ~LCD_BACKLIGHT;
+        lcd_backlight_status &= ~LCD_BACKLIGHT;
     }
-    ESP_ERROR_CHECK(i2c_master_transmit(i2c_device_handle, &lcd_status, 1, -1));
+    ESP_ERROR_CHECK(i2c_master_transmit(i2c_device_handle, &lcd_backlight_status, 1, -1));
     ESP_LOGI(TAG, "LCD backlight %s", state ? "on" : "off");
 }
