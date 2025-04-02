@@ -1,0 +1,36 @@
+# Compiled object files, libraries, and executables
+*.o
+*.a
+*.d
+*.elf
+*.bin
+*.hex
+*.map
+*.ld
+
+# ESP-IDF build output
+/build/
+sdkconfig
+sdkconfig.old
+
+# Logs and debugging files
+*.log
+*.bak
+*.swp
+*.swo
+
+# Python environment files
+*.pyc
+*.pyo
+__pycache__/
+.env/
+.venv/
+
+# IDE specific files
+.vscode/
+.idea/
+*.code-workspace
+
+# Other system files
+.DS_Store
+Thumbs.db
